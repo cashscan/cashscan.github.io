@@ -310,6 +310,10 @@ function notePreview(content) {
   const normalized = (content || '').replace(/\s+/g, ' ').trim()
   return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized
 }
+
+function bchNostrNoteUrl(noteId) {
+  return `${BCH_NOSTR_URL.replace(/\/$/, '')}/note/${noteId}`
+}
 </script>
 
 <template>
@@ -490,7 +494,7 @@ function notePreview(content) {
             <p>{{ notePreview(note.content) }}</p>
             <div class="community-note-meta">
               <span>{{ relativeTime(note.createdAt) }}</span>
-              <a :href="`https://njump.me/${note.id}`" target="_blank" rel="noopener">Open note ↗</a>
+              <a :href="bchNostrNoteUrl(note.id)" target="_blank" rel="noopener">Open note ↗</a>
             </div>
           </article>
         </template>
