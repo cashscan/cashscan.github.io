@@ -32,8 +32,11 @@ must own a repository named exactly `cashscan.github.io`. Rename or transfer the
 current `cashscan/cashscan` repository to `cashscan/cashscan.github.io`, then:
 
 1. Push this repository to the `main` branch.
-2. In **Settings → Pages**, set **Source** to **GitHub Actions**.
-3. Wait for the **Deploy GitHub Pages** workflow to complete.
+2. In **Settings → Pages**, set **Source** to **GitHub Actions**. Do not use
+  **Deploy from a branch**, which publishes Vite source files and causes an
+  unresolved `vue` module error.
+3. Push another commit or run **Deploy GitHub Pages** manually from the Actions
+  tab, then wait for it to complete.
 
 The site uses hash routing, so shared request links remain portable without
 server-side route rewrites.
