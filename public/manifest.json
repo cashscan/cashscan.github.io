@@ -1,0 +1,14 @@
+{
+  "name": "CashScan — Token Explorer",
+  "short_name": "CashScan",
+  "description": "Explore Bitcoin Cash tokens, liquidity pools, and prices. Non-custodial.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#06090A",
+  "theme_color": "#06090A",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "https://bitcoincash.org/img/green/bitcoin-cash-circle.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "https://bitcoincash.org/img/green/bitcoin-cash-circle.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
