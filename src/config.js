@@ -7,7 +7,7 @@ export const APP = {
   name: 'CashScan',
   tagline: 'Explore CashTokens. Track liquidity. Stay non-custodial.',
   short: 'CashScan',
-  repositoryUrl: 'https://github.com/invalidcastvibe/cashscan',
+  repositoryUrl: 'https://github.com/cashscan/cashscan',
   logoUrl: 'https://bitcoincash.org/img/green/bitcoin-cash-circle.svg'
 }
 
