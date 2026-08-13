@@ -97,7 +97,7 @@ onUnmounted(() => clearInterval(pollTimer))
         <div class="brand-tag">BCH + CASHTOKENS</div>
       </div>
     </div>
-    <a class="repository-link" :href="APP.repositoryUrl" target="_blank" rel="noopener" aria-label="Open CashScan repository on GitHub">
+    <a v-if="APP.repositoryUrl" class="repository-link" :href="APP.repositoryUrl" target="_blank" rel="noopener" aria-label="Open CashScan repository on GitHub">
       GitHub <span aria-hidden="true">↗</span>
     </a>
   </header>
@@ -120,10 +120,16 @@ onUnmounted(() => clearInterval(pollTimer))
 
 <style scoped>
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 18px 16px 10px;
+  background: rgba(6, 9, 10, 0.96);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
 }
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand-mark {

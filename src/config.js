@@ -3,11 +3,16 @@
 // should hard-code the app name or an API host — import from here instead.
 // -----------------------------------------------------------------------
 
+// Canonical source repository. Set VITE_REPOSITORY_URL to an empty value to
+// remove repository links from a deployment without changing any component.
+export const REPOSITORY_URL =
+  import.meta.env.VITE_REPOSITORY_URL ?? 'https://github.com/cashscan/cashscan.github.io'
+
 export const APP = {
   name: 'CashScan',
   tagline: 'Explore CashTokens. Track liquidity. Stay non-custodial.',
   short: 'CashScan',
-  repositoryUrl: 'https://github.com/cashscan/cashscan',
+  repositoryUrl: REPOSITORY_URL,
   logoUrl: 'https://bitcoincash.org/img/green/bitcoin-cash-circle.svg'
 }
 
@@ -28,6 +33,14 @@ export const RIFTEN_TOKEN_ICON_BASE =
 // Read-only Chaingraph endpoint used for token supply, holder, and authchain data.
 export const CHAINGRAPH_API_BASE =
   import.meta.env.VITE_CHAINGRAPH_API_BASE || 'https://chaingraph.paryonusd.com/v1/graphql'
+// Public relays queried for token-related community notes. Comma-separated
+// overrides let a deployment use BCH/Nostr-specific relays as they emerge.
+export const NOSTR_RELAYS = (import.meta.env.VITE_NOSTR_RELAYS || 'wss://relay.bchnostr.com,wss://relay.nostr.band,wss://relay.damus.io')
+  .split(',')
+  .map((relay) => relay.trim())
+  .filter(Boolean)
+export const BCH_NOSTR_URL =
+  import.meta.env.VITE_BCH_NOSTR_URL || 'https://bchnostr.com/'
 // Cauldron DEX web app, used only for outbound "trade this token" links.
 // CashScan never embeds or proxies trading — see spec section 23.
 export const CAULDRON_APP_URL =

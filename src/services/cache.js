@@ -70,6 +70,7 @@ export const TTL = {
   TOKEN_PRICE: 20_000, // 20s
   TOKEN_METADATA: 6 * 60 * 60_000, // 6h
   CHAIN_INSIGHTS: 5 * 60_000, // 5 min
+  COMMUNITY: 2 * 60_000, // 2 min
   HISTORY: 5 * 60_000, // 5 min
   BCH_PRICE: 30_000
 }

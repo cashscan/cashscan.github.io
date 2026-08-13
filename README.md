@@ -94,3 +94,10 @@ All are public, unauthenticated GET endpoints. Override any base URL via `.env`
   indexer. CashScan cannot move, hold, or touch funds at any point.
 - Nothing sensitive is put in URLs or localStorage — only addresses, public
   token ids, and amounts you typed in yourself.
+- Community notes are opt-in, queried from public Nostr relays, and displayed
+  only as escaped text after conservative local filtering. Links and common
+  phishing, credential-request, and scam patterns are excluded by default.
+- The static GitHub Pages deployment does not embed a Google Safe Browsing API
+  key. If URL reputation checks are added later, they must run through a
+  server-side proxy that keeps the key private and shows an interstitial before
+  redirecting to an unsafe destination.

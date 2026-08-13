@@ -7,9 +7,10 @@ import {
 } from '../services/cauldron.js'
 import { getNormalizedMetadata } from '../services/bcmr.js'
 import { getTokenChainInsights } from '../services/chaingraph.js'
+import { getTokenCommunityNotes } from '../services/nostr.js'
 import { priceToSatsPerWholeToken } from '../utils/token.js'
-import { isWatched, toggleWatch } from '../utils/storage.js'
-import { CAULDRON_APP_URL, BCH_EXPLORER_BASE } from '../config.js'
+import { getSettings, isWatched, toggleWatch } from '../utils/storage.js'
+import { BCH_NOSTR_URL, CAULDRON_APP_URL, BCH_EXPLORER_BASE } from '../config.js'
 import SkeletonLoader from '../components/SkeletonLoader.vue'
 
 const props = defineProps({ category: { type: String, required: true } })
@@ -17,7 +18,7 @@ const route = useRoute()
 
 const meta = ref({ loading: true, data: null })
 const priceInfo = reactive({ loading: true, error: false, satsPerToken: null, priceChange: null })
-const candles = ref({ loading: true, error: false, points: [] })
+const candles = ref({ loading: true, error: false, items: [] })
 const stats = reactive({ loading: true, error: false, tvlBch: null, tvlToken: null, volumeBch: null, txCount: null })
 const firstPool = ref({ loading: true, data: null })
 const pools = ref({ loading: true, data: [] })
@@ -26,6 +27,14 @@ const range = ref('1D')
 const watched = ref(isWatched(props.category))
 const iconFailed = ref(false)
 const chain = ref({ loading: true, error: false, data: null })
+const chartMode = ref('candle')
+const showSma7 = ref(false)
+const showSma21 = ref(false)
+const selectedCandle = ref(null)
+const chartRef = ref(null)
+const categoryCopied = ref(false)
+const community = ref({ loading: true, error: false, notes: [], source: null, candidateCount: 0, relatedCount: 0, filteredCount: 0 })
+const communityEnabled = ref(getSettings().communityEnabled)
 
 const RANGES = { '1H': 3600, '1D': 86400, '1W': 604800, '1M': 2592000, ALL: 31536000 }
 
@@ -55,21 +64,25 @@ async function loadPrice() {
 }
 
 async function loadCandles() {
-  candles.value = { loading: true, error: false, points: [] }
+  candles.value = { loading: true, error: false, items: [] }
+  selectedCandle.value = null
   try {
     const seconds = RANGES[range.value]
     const end = Math.floor(Date.now() / 1000)
     const start = end - seconds
     const stepsize = Math.max(300, Math.floor(seconds / 80))
     const data = await getTokenCandles(props.category, { start, end, stepsize })
-    const points = (data?.candlesticks || []).map((c) => c.close)
-    candles.value = { loading: false, error: false, points }
-    if (points.length >= 2) {
-      const change = ((points[points.length - 1] - points[0]) / points[0]) * 100
+    const items = (data?.candlesticks || []).map((c) => ({
+      open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close),
+      time: Number(c.time), volumeSats: Number(c.volume_sats || 0), transactions: Number(c.transaction_count || 0)
+    })).filter((c) => [c.open, c.high, c.low, c.close].every(Number.isFinite))
+    candles.value = { loading: false, error: false, items }
+    if (items.length >= 2) {
+      const change = ((items[items.length - 1].close - items[0].close) / items[0].close) * 100
       priceInfo.priceChange = change
     }
   } catch {
-    candles.value = { loading: false, error: true, points: [] }
+    candles.value = { loading: false, error: true, items: [] }
   }
 }
 
@@ -145,6 +158,20 @@ async function loadChainInsights() {
   }
 }
 
+async function loadCommunity() {
+  if (!communityEnabled.value) {
+    community.value = { loading: false, error: false, notes: [], source: null, candidateCount: 0, relatedCount: 0, filteredCount: 0 }
+    return
+  }
+  community.value = { loading: true, error: false, notes: [], source: null, candidateCount: 0, relatedCount: 0, filteredCount: 0 }
+  try {
+    const result = await getTokenCommunityNotes(props.category, meta.value.data?.symbol)
+    community.value = { loading: false, error: false, ...result }
+  } catch {
+    community.value = { loading: false, error: true, notes: [], source: null, candidateCount: 0, relatedCount: 0, filteredCount: 0 }
+  }
+}
+
 async function loadAll() {
   await loadMeta()
   loadPrice()
@@ -154,11 +181,12 @@ async function loadAll() {
   loadPools()
   loadActivity()
   loadChainInsights()
+  loadCommunity()
 }
 
 onMounted(loadAll)
 watch(range, loadCandles)
-watch(() => props.category, () => { watched.value = isWatched(props.category); loadAll() })
+watch(() => props.category, () => { watched.value = isWatched(props.category); categoryCopied.value = false; loadAll() })
 watch(() => meta.value.data?.icon, () => { iconFailed.value = false })
 
 function toggleWatchlist() {
@@ -166,25 +194,79 @@ function toggleWatchlist() {
   watched.value = isWatched(props.category)
 }
 
-function copyCategory() {
-  navigator.clipboard?.writeText(props.category).catch(() => {})
+function scrollToSection(sectionId) {
+  document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+async function copyCategory() {
+  if (!navigator.clipboard) return
+  try {
+    await navigator.clipboard.writeText(props.category)
+    categoryCopied.value = true
+    setTimeout(() => { categoryCopied.value = false }, 1600)
+  } catch {
+    categoryCopied.value = false
+  }
 }
 
 const sparkPath = computed(() => {
-  const pts = candles.value.points
-  if (pts.length < 2) return ''
-  const min = Math.min(...pts)
-  const max = Math.max(...pts)
-  const span = max - min || 1
-  const w = 300, h = 80
+  const pts = candles.value.items.map((c) => c.close)
+  const metrics = chartMetrics.value
+  if (pts.length < 2 || !metrics) return ''
   return pts
     .map((p, i) => {
-      const x = (i / (pts.length - 1)) * w
-      const y = h - ((p - min) / span) * h
+      const x = metrics.xFor(i)
+      const y = metrics.yFor(p)
       return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
     })
     .join(' ')
 })
+
+function movingAverage(period) {
+  return candles.value.items.map((candle, index, items) => {
+    if (index < period - 1) return null
+    const closes = items.slice(index - period + 1, index + 1).map((item) => item.close)
+    return closes.reduce((total, close) => total + close, 0) / period
+  })
+}
+
+const chartMetrics = computed(() => {
+  const items = candles.value.items
+  if (!items.length) return null
+  const ma7 = movingAverage(7)
+  const ma21 = movingAverage(21)
+  const values = items.flatMap((item) => [item.low, item.high])
+  for (const value of [...ma7, ...ma21]) if (value !== null) values.push(value)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const span = max - min || Math.max(max * 0.01, 1)
+  const width = 420
+  const height = 150
+  const padding = 4
+  const xFor = (index) => padding + ((width - padding * 2) * index) / Math.max(items.length - 1, 1)
+  const yFor = (value) => height - padding - ((value - min) / span) * (height - padding * 2)
+  const linePath = (valuesToDraw) => valuesToDraw.map((value, index) => value === null ? '' : `${index === 0 || valuesToDraw[index - 1] === null ? 'M' : 'L'}${xFor(index).toFixed(1)},${yFor(value).toFixed(1)}`).join(' ')
+  return { width, height, xFor, yFor, candleWidth: Math.max(2, Math.min(10, ((width - padding * 2) / items.length) * 0.62)), ma7, ma21, linePath, min, max }
+})
+
+function selectCandle(event) {
+  const metrics = chartMetrics.value
+  const items = candles.value.items
+  const bounds = chartRef.value?.getBoundingClientRect()
+  if (!metrics || !bounds || !items.length) return
+  const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width))
+  const index = Math.round(ratio * (items.length - 1))
+  selectedCandle.value = items[index]
+}
+
+function formatChartValue(value) {
+  if (!Number.isFinite(value)) return '—'
+  return value >= 1 ? value.toFixed(4) : value.toPrecision(5)
+}
+
+function formatCandleTime(timestamp) {
+  return new Date(timestamp * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
 
 // Converter widget
 const convertAmount = ref('')
@@ -213,6 +295,20 @@ function formatTokenAmount(value) {
   const whole = digits.slice(0, -decimals).replace(/^0+(?=\d)/, '')
   const fraction = digits.slice(-decimals).replace(/0+$/, '')
   return `${Number(whole).toLocaleString('en-US')}${fraction ? `.${fraction}` : ''}`
+}
+
+function relativeTime(timestamp) {
+  if (!timestamp) return 'Time unavailable'
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - Number(timestamp)))
+  if (seconds < 60) return 'Just now'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes ago`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`
+  return `${Math.floor(seconds / 86400)} days ago`
+}
+
+function notePreview(content) {
+  const normalized = (content || '').replace(/\s+/g, ' ').trim()
+  return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized
 }
 </script>
 
@@ -246,19 +342,77 @@ function formatTokenAmount(value) {
     </div>
 
     <div class="chart-card">
-      <SkeletonLoader v-if="candles.loading" height="80px" />
-      <div v-else-if="candles.error || !candles.points.length" class="empty-inline">No trade history for this range.</div>
-      <svg v-else viewBox="0 0 300 80" class="spark">
-        <path :d="sparkPath" fill="none" stroke="var(--bch)" stroke-width="2" />
-      </svg>
+      <div class="chart-toolbar">
+        <div class="chart-mode" role="group" aria-label="Chart type">
+          <button type="button" :class="{ active: chartMode === 'candle' }" @click="chartMode = 'candle'">Candles</button>
+          <button type="button" :class="{ active: chartMode === 'line' }" @click="chartMode = 'line'">Line</button>
+        </div>
+        <div class="indicator-tools" aria-label="Chart indicators">
+          <button type="button" :class="{ active: showSma7 }" @click="showSma7 = !showSma7">SMA 7</button>
+          <button type="button" :class="{ active: showSma21 }" @click="showSma21 = !showSma21">SMA 21</button>
+        </div>
+      </div>
+      <SkeletonLoader v-if="candles.loading" height="150px" />
+      <div v-else-if="candles.error || !candles.items.length" class="empty-inline">No trade history for this range.</div>
+      <template v-else-if="chartMetrics">
+        <svg ref="chartRef" :viewBox="`0 0 ${chartMetrics.width} ${chartMetrics.height}`" preserveAspectRatio="none" class="spark" role="img" aria-label="Interactive token price chart" @mousemove="selectCandle" @mouseleave="selectedCandle = null">
+          <line v-for="level in 4" :key="level" x1="4" :x2="chartMetrics.width - 4" :y1="(chartMetrics.height / 5) * level" :y2="(chartMetrics.height / 5) * level" class="chart-grid" />
+          <template v-if="chartMode === 'candle'">
+            <g v-for="(candle, index) in candles.items" :key="candle.time">
+              <line :x1="chartMetrics.xFor(index)" :x2="chartMetrics.xFor(index)" :y1="chartMetrics.yFor(candle.high)" :y2="chartMetrics.yFor(candle.low)" :class="candle.close >= candle.open ? 'candle-up' : 'candle-down'" />
+              <rect :x="chartMetrics.xFor(index) - chartMetrics.candleWidth / 2" :y="chartMetrics.yFor(Math.max(candle.open, candle.close))" :width="chartMetrics.candleWidth" :height="Math.max(1, Math.abs(chartMetrics.yFor(candle.open) - chartMetrics.yFor(candle.close)))" :class="candle.close >= candle.open ? 'candle-up' : 'candle-down'" />
+            </g>
+          </template>
+          <path v-else :d="sparkPath" class="price-line" />
+          <path v-if="showSma7" :d="chartMetrics.linePath(chartMetrics.ma7)" class="sma-seven" />
+          <path v-if="showSma21" :d="chartMetrics.linePath(chartMetrics.ma21)" class="sma-twenty-one" />
+          <line v-if="selectedCandle" :x1="chartMetrics.xFor(candles.items.indexOf(selectedCandle))" :x2="chartMetrics.xFor(candles.items.indexOf(selectedCandle))" y1="4" :y2="chartMetrics.height - 4" class="chart-cursor" />
+        </svg>
+        <div class="chart-readout">
+          <template v-if="selectedCandle">
+            <span>{{ formatCandleTime(selectedCandle.time) }}</span>
+            <span>O {{ formatChartValue(selectedCandle.open) }}</span><span>H {{ formatChartValue(selectedCandle.high) }}</span><span>L {{ formatChartValue(selectedCandle.low) }}</span><span>C {{ formatChartValue(selectedCandle.close) }}</span>
+            <span>{{ selectedCandle.transactions }} tx</span>
+          </template>
+          <template v-else><span>Hover the chart for OHLC and transaction details.</span><span>Range {{ formatChartValue(chartMetrics.min) }}–{{ formatChartValue(chartMetrics.max) }}</span></template>
+        </div>
+      </template>
     </div>
 
-    <div class="section">
+    <nav class="token-section-nav" aria-label="Token detail sections">
+      <button type="button" @click="scrollToSection('token-convert')">Convert</button>
+      <button type="button" @click="scrollToSection('token-information')">Info</button>
+      <button type="button" @click="scrollToSection('token-supply')">Supply</button>
+      <button type="button" @click="scrollToSection('token-authchain')">Authchain</button>
+      <button type="button" @click="scrollToSection('token-metadata')">Metadata</button>
+      <button v-if="communityEnabled" type="button" @click="scrollToSection('token-community')">Community</button>
+      <button type="button" @click="scrollToSection('token-activity')">Activity</button>
+    </nav>
+
+    <div id="token-convert" class="section token-section-anchor">
+      <div class="section-title">Convert</div>
+      <div class="card">
+        <div class="convert-row">
+          <input type="text" inputmode="decimal" v-model="convertAmount" placeholder="Amount" />
+          <div class="direction-switch" role="group" aria-label="Conversion direction">
+            <button type="button" :class="{ active: convertDirection === 'token' }" @click="convertDirection = 'token'">{{ meta.data?.symbol || 'TOKEN' }} → BCH</button>
+            <button type="button" :class="{ active: convertDirection === 'bch' }" @click="convertDirection = 'bch'">BCH → {{ meta.data?.symbol || 'TOKEN' }}</button>
+          </div>
+        </div>
+        <div v-if="convertedBch !== null" class="convert-result mono">
+          = {{ convertedBch.toFixed(8) }} {{ convertDirection === 'token' ? 'BCH' : (meta.data?.symbol || 'TOKEN') }}
+        </div>
+      </div>
+    </div>
+
+    <div id="token-information" class="section token-section-anchor">
       <div class="section-title">Token Information</div>
       <div class="card">
         <div class="card-row">
           <span class="label">Category</span>
-          <button class="value mono link-btn" @click="copyCategory">{{ category.slice(0, 14) }}…</button>
+          <button class="value mono link-btn category-copy" :title="categoryCopied ? 'Category copied' : 'Copy full token category'" :aria-label="categoryCopied ? 'Token category copied' : 'Copy full token category'" @click="copyCategory">
+            {{ categoryCopied ? 'Copied' : `${category.slice(0, 14)}…` }}
+          </button>
         </div>
         <div class="card-row">
           <span class="label">Decimals</span>
@@ -279,7 +433,7 @@ function formatTokenAmount(value) {
       </div>
     </div>
 
-    <div class="section">
+    <div id="token-supply" class="section token-section-anchor">
       <div class="section-title">Supply & Holders</div>
       <div class="card">
         <SkeletonLoader v-if="chain.loading" height="16px" rows="5" />
@@ -296,7 +450,7 @@ function formatTokenAmount(value) {
       </div>
     </div>
 
-    <div class="section">
+    <div id="token-authchain" class="section token-section-anchor">
       <div class="section-title">Authchain & Metadata</div>
       <div class="card">
         <div class="card-row"><span class="label">Genesis transaction</span><a class="value mono" :href="`${BCH_EXPLORER_BASE}/tx/${category}`" target="_blank" rel="noopener">{{ category.slice(0, 12) }}…</a></div>
@@ -312,7 +466,7 @@ function formatTokenAmount(value) {
       </div>
     </div>
 
-    <div class="section">
+    <div id="token-metadata" class="section token-section-anchor">
       <div class="section-title">Metadata</div>
       <div class="card">
         <template v-if="meta.data?.found">
@@ -327,33 +481,43 @@ function formatTokenAmount(value) {
       </div>
     </div>
 
-    <div class="section">
-      <div class="section-title">Convert</div>
-      <div class="card">
-        <div class="convert-row">
-          <input type="text" inputmode="decimal" v-model="convertAmount" placeholder="Amount" />
-          <select v-model="convertDirection">
-            <option value="token">{{ meta.data?.symbol || 'TOKEN' }} → BCH</option>
-            <option value="bch">BCH → {{ meta.data?.symbol || 'TOKEN' }}</option>
-          </select>
-        </div>
-        <div v-if="convertedBch !== null" class="convert-result mono">
-          = {{ convertedBch.toFixed(8) }} {{ convertDirection === 'token' ? 'BCH' : (meta.data?.symbol || 'TOKEN') }}
+    <div v-if="communityEnabled" id="token-community" class="section token-section-anchor">
+      <div class="section-title section-title-row"><span>Community</span><a :href="BCH_NOSTR_URL" target="_blank" rel="noopener">BCH Nostr ↗</a></div>
+      <div class="card community-card">
+        <SkeletonLoader v-if="community.loading" rows="2" height="18px" />
+        <template v-else-if="community.notes.length">
+          <article v-for="note in community.notes" :key="note.id" class="community-note">
+            <p>{{ notePreview(note.content) }}</p>
+            <div class="community-note-meta">
+              <span>{{ relativeTime(note.createdAt) }}</span>
+              <a :href="`https://njump.me/${note.id}`" target="_blank" rel="noopener">Open note ↗</a>
+            </div>
+          </article>
+        </template>
+        <div v-else-if="community.error" class="empty-inline">Community notes could not be reached. <button class="btn-link" @click="loadCommunity">Retry</button></div>
+        <div v-else class="empty-inline">
+          <template v-if="community.filteredCount">{{ community.filteredCount }} matching note{{ community.filteredCount === 1 ? '' : 's' }} were hidden by filters.</template>
+          <template v-else-if="community.candidateCount">No recent Nostr notes explicitly mention this token.</template>
+          <template v-else>No configured relay returned recent notes. Try again later or update the relay list.</template>
         </div>
       </div>
     </div>
 
-    <div class="section">
+    <div id="token-activity" class="section token-section-anchor">
       <div class="section-title">Recent Activity</div>
       <template v-if="activity.loading"><SkeletonLoader rows="3" height="18px" /></template>
       <template v-else-if="activity.error || !activity.items.length">
-        <div class="empty-inline">No recent transaction activity indexed.</div>
+        <div class="empty-inline">No recent activity for this token is currently indexed.</div>
       </template>
       <div v-else class="card">
-        <a v-for="tx in activity.items" :key="tx.txid" :href="`${BCH_EXPLORER_BASE}/tx/${tx.txid}`" target="_blank" rel="noopener" class="activity-link">
-          <span class="value mono">{{ tx.txid.slice(0, 12) }}…</span>
-          <span class="label">View transaction ↗</span>
-        </a>
+        <div v-for="tx in activity.items" :key="tx.txid" class="activity-item">
+          <span :class="['activity-dot', tx.blockhash ? 'confirmed' : 'pending']" aria-hidden="true"></span>
+          <div class="activity-copy">
+            <strong>Token activity recorded</strong>
+            <span>{{ relativeTime(tx.timestamp_guess) }} · {{ tx.blockhash ? 'Confirmed on the BCH network' : 'Awaiting confirmation' }}</span>
+          </div>
+          <a :href="`${BCH_EXPLORER_BASE}/tx/${tx.txid}`" target="_blank" rel="noopener" class="activity-explorer" :aria-label="`View transaction ${tx.txid} in explorer`">Details ↗</a>
+        </div>
       </div>
     </div>
 
@@ -379,20 +543,57 @@ function formatTokenAmount(value) {
 .range-btn { flex: 1; padding: 8px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text-dim); font-size: 12px; font-family: var(--font-mono); }
 .range-btn.active { color: var(--bch); border-color: var(--bch); }
 .chart-card { margin-top: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
-.spark { width: 100%; height: 80px; display: block; }
+.chart-toolbar { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 10px; overflow-x: auto; }
+.chart-mode, .indicator-tools { display: inline-flex; flex-shrink: 0; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-raised); }
+.chart-toolbar button { min-height: 28px; border: 0; border-radius: 3px; background: transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 10px; padding: 0 8px; }
+.chart-toolbar button.active { background: var(--surface); color: var(--bch); box-shadow: inset 0 0 0 1px var(--bch-dim); }
+.spark { width: 100%; height: 150px; display: block; touch-action: pan-y; }
+.chart-grid { stroke: var(--border); stroke-width: 0.5; }
+.candle-up { fill: var(--bch); stroke: var(--bch); stroke-width: 1; }
+.candle-down { fill: var(--red); stroke: var(--red); stroke-width: 1; }
+.price-line, .sma-seven, .sma-twenty-one { fill: none; stroke-width: 1.6; }
+.price-line { stroke: var(--bch); }
+.sma-seven { stroke: var(--amber); }
+.sma-twenty-one { stroke: #82aaff; }
+.chart-cursor { stroke: var(--text-dim); stroke-dasharray: 2 2; stroke-width: 0.75; }
+.chart-readout { display: flex; flex-wrap: wrap; gap: 5px 10px; min-height: 32px; margin-top: 8px; color: var(--text-dim); font-family: var(--font-mono); font-size: 10px; line-height: 1.35; }
+.chart-readout span:first-child { color: var(--text); }
+.token-section-nav { position: sticky; top: 63px; z-index: 20; display: flex; gap: 6px; overflow-x: auto; margin: 14px -16px 0; padding: 9px 16px; background: rgba(6, 9, 10, 0.96); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); scrollbar-width: none; }
+.token-section-nav::-webkit-scrollbar { display: none; }
+.token-section-nav button { flex: 0 0 auto; padding: 7px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text-dim); font-family: var(--font-mono); font-size: 11px; }
+.token-section-nav button:hover { border-color: var(--bch-dim); color: var(--bch); }
+.token-section-anchor { scroll-margin-top: 116px; }
 .link-btn { background: none; border: none; color: var(--bch); cursor: pointer; }
+.category-copy::after { content: ' copy'; color: var(--text-dim); font-family: var(--font-body); font-size: 11px; }
 .description { font-size: 13px; color: var(--text); margin: 8px 0; }
+.section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.section-title-row a { color: var(--bch); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0; text-transform: none; }
 .badge-good { color: var(--bch); font-family: var(--font-mono); font-size: 13px; }
 .badge-warn { color: var(--amber); font-family: var(--font-mono); font-size: 13px; }
-.convert-row { display: flex; gap: 8px; }
+.convert-row { display: grid; gap: 10px; }
+.convert-row input { min-width: 0; }
+.direction-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); }
+.direction-switch button { min-width: 0; min-height: 40px; border: 0; border-radius: 5px; background: transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.direction-switch button.active { background: var(--surface); box-shadow: inset 0 0 0 1px var(--bch-dim); color: var(--bch); }
 .convert-result { margin-top: 10px; color: var(--bch); }
 .empty-inline { color: var(--text-dim); font-size: 13px; padding: 8px 0; }
-.activity-link { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--text); text-decoration: none; transition: background-color 0.15s ease; }
-.activity-link:last-child { border-bottom: none; }
-.activity-link:hover { background-color: var(--surface-raised); }
+.activity-item { display: flex; align-items: center; gap: 10px; padding: 12px 0; }
+.activity-item + .activity-item { border-top: 1px solid var(--border); }
+.activity-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.activity-dot.confirmed { background: var(--bch); box-shadow: 0 0 8px var(--bch); }
+.activity-dot.pending { background: var(--amber); box-shadow: 0 0 8px rgba(228, 167, 59, 0.35); }
+.activity-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.activity-copy strong { font-family: var(--font-display); font-size: 14px; }
+.activity-copy span { color: var(--text-dim); font-size: 12px; line-height: 1.35; }
+.activity-explorer { flex-shrink: 0; font-family: var(--font-mono); font-size: 12px; }
 .muted { color: var(--text-dim); }
 .chain-note { margin: 12px 0 0; color: var(--text-dim); font-size: 11px; line-height: 1.4; }
 .chain-note.warning { color: var(--amber); }
 .authchain-list { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
 .authchain-link { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.community-card { padding: 0; overflow: hidden; }
+.community-note { padding: 14px; }
+.community-note + .community-note { border-top: 1px solid var(--border); }
+.community-note p { margin: 0; color: var(--text); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.community-note-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: 9px; color: var(--text-dim); font-family: var(--font-mono); font-size: 11px; }
 </style>

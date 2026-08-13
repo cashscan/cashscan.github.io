@@ -115,6 +115,10 @@ const DEFAULT_SETTINGS = {
   currency: 'USD',
   theme: 'dark',
   confirmationsRequired: 0,
+  communityEnabled: false,
+  communitySystemFiltersEnabled: true,
+  communitySystemFilterStates: {},
+  communityFilters: [],
   bchExplorerBase: null,
   blockchainApiBase: null,
   lastAddress: null
