@@ -1,7 +1,7 @@
 // Minimal hand-written service worker (kept separate from vite-plugin-pwa's
 // generated one for clarity in review — swap for the generated sw.js at
 // build time if you enable VitePWA's `injectRegister`).
-const SHELL_CACHE = 'cashscan-shell-v1'
+const SHELL_CACHE = 'cashscan-shell-v2'
 const SHELL_ASSETS = ['/', '/index.html', '/offline.html', '/manifest.json']
 
 self.addEventListener('install', (event) => {
@@ -33,7 +33,22 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // App shell: cache-first, falling back to network, falling back to offline page.
+  // HTML documents must be network-first. Vite filenames are content-hashed, so
+  // serving an old cached index.html after a deploy can reference removed assets.
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const copy = response.clone()
+          caches.open(SHELL_CACHE).then((cache) => cache.put(request, copy))
+          return response
+        })
+        .catch(() => caches.match(request).then((cached) => cached || caches.match('/offline.html')))
+    )
+    return
+  }
+
+  // Other shell assets remain cache-first, with a network fallback.
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached
